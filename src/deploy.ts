@@ -3,6 +3,7 @@ import process from "node:process";
 import { logger } from "@yuudachi/framework";
 import { Routes, REST } from "discord.js";
 import {
+	GithubResolveContextCommand,
 	SnowflakeInfoCommand,
 	BitfieldLookupCommand,
 	IntentsLookupContextCommand,
@@ -21,6 +22,7 @@ try {
 		SnowflakeInfoCommand,
 		UserInfoContextCommand,
 		BitfieldLookupCommand,
+		GithubResolveContextCommand,
 	];
 
 	await rest.put(Routes.applicationCommands(process.env.DISCORD_CLIENT_ID!), {

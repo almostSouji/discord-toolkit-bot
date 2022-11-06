@@ -1,4 +1,4 @@
-import { Command } from "@yuudachi/framework";
+import { Command, logger } from "@yuudachi/framework";
 import type { InteractionParam, ArgsParam, CommandMethod } from "@yuudachi/framework/types";
 import { GatewayIntentBits, codeBlock, IntentsBitField, type BitField } from "discord.js";
 import kleur from "kleur";
@@ -60,6 +60,7 @@ export default class extends Command<typeof BitfieldLookupCommand | typeof Inten
 				await permissions(interaction, args.permissions);
 				break;
 			default:
+				logger.info(`Unknown bitfields sub command: ${Object.keys(args)[0]}`);
 				console.log(args);
 		}
 	}
