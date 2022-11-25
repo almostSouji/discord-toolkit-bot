@@ -60,7 +60,7 @@ export function validateFileSize(file: Buffer) {
 }
 
 export function resolveFileLanguage(url: string) {
-	return url!.split(".").pop()?.replace(GitHubUrlLinesRegex, "") ?? "ansi";
+	return url.split(".").pop()?.replace(GitHubUrlLinesRegex, "") ?? "ansi";
 }
 
 export function generateHeader(options: GenerateHeaderOptions): string {
