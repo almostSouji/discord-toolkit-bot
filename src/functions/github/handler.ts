@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { URL } from "node:url";
 import type { AttachmentPayload } from "discord.js";
 import { codeBlock } from "discord.js";
-import { request } from "undici";
+import { fetch } from "undici";
 import { trimLeadingIndent, truncateArray } from "../../util/array.js";
 import { URL_REGEX } from "../../util/constants.js";
 import { GistGitHubUrlRegex, NormalGitHubUrlRegex } from "./regex.js";
@@ -10,7 +10,7 @@ import { formatLine, generateHeader, resolveFileLanguage, resolveLines } from ".
 
 const SAFE_BOUNDARY = 100;
 
-enum GitHubUrlType {
+export enum GitHubUrlType {
 	Normal,
 	Gist,
 	Diff,
@@ -28,27 +28,25 @@ const validators = [
 	{
 		type: GitHubUrlType.Normal,
 		regex: NormalGitHubUrlRegex,
-		converter: (url: string): string =>
-			url
+		converter: (url: string): string => {
+			return url
 				.replace(">", "")
 				.replace("github.com", "raw.githubusercontent.com")
-				.replace(/\/(?:blob|(?:blame))/, ""),
+				.replace(/\/(?:blob|(?:blame))/, "");
+		},
 	},
 	{
 		type: GitHubUrlType.Gist,
 		regex: GistGitHubUrlRegex,
 		converter: (url: string): string | null => {
 			// eslint-disable-next-line unicorn/no-unsafe-regex
-			const { user, id, opts } = new RegExp(GistGitHubUrlRegex, "").exec(url.replace(/(?:-L\d+)+/, ""))!.groups!;
+			const { id, opts } = new RegExp(GistGitHubUrlRegex, "").exec(url.replace(/(?:-L\d+)+/, ""))!.groups!;
 
-			if (!user || !id || !opts) {
+			if (!id || !opts) {
 				return null;
 			}
 
-			const fileName = opts.split("-").slice(0, -1).join(".");
-			const extension = opts.split("-").pop();
-
-			return `https://gist.githubusercontent.com/${user}/${id}/raw/${fileName}.${extension}`;
+			return `https://api.github.com/gists/${id}`;
 		},
 	},
 ];
@@ -61,7 +59,6 @@ export async function matchGitHubUrls(text: string): Promise<GitHubMatchResult[]
 		.map(([url]) => {
 			const match = validators.find((validator) => validator.regex.exec(url!));
 			if (!match) return null;
-
 			const regexMatch = match.regex.exec(url!);
 			const { opts } = regexMatch!.groups!;
 			if (!regexMatch || !regexMatch[0]) return null;
@@ -87,20 +84,47 @@ export async function resolveGitHubResults(matches: GitHubMatchResult[]) {
 	const results: ResolvedGitHubResult[] = [];
 
 	for (const { url, opts, converter, type } of matches) {
-		const rawUrl = converter(url);
-		if (!rawUrl) continue;
-
-		const rawFile = await request(rawUrl).then(async (res) => (res.statusCode === 200 ? res.body.text() : null));
+		const rawData = converter(url);
+		if (!rawData) continue;
+		const rawFile: string | { files: Record<string, { content: string }> } | null = (await fetch(rawData).then((res) =>
+			res.status === 200 ? (type === GitHubUrlType.Gist ? res.json() : res.text()) : null,
+		)) as string | { files: Record<string, { content: string }> } | null;
 		if (!rawFile) continue;
-		const { startLine, endLine } = resolveLines(opts);
+		const parsedFiles: Record<string, { parsed: { content: string }; raw: string }> = {};
+		let fileContents: string | undefined;
+		if (type === GitHubUrlType.Gist && typeof rawFile === "object") {
+			for (const key in rawFile.files) {
+				if (!Object.hasOwn(rawFile.files, key)) continue;
+				parsedFiles[key.replaceAll(".", "-")] = { raw: key, parsed: rawFile.files[key]! };
+			}
 
-		const lang = resolveFileLanguage(rawUrl);
-		const path = new URL(url).pathname;
-		const parsedLines = rawFile.split("\n");
+			fileContents = parsedFiles[opts!.replaceAll(/-L\d+/g, "").replaceAll(".", "-")]?.parsed.content;
+		} else {
+			fileContents = rawFile as string;
+		}
+
+		if (!fileContents) continue;
+		const { startLine, endLine } = resolveLines(opts);
+		const lang =
+			type === GitHubUrlType.Gist
+				? resolveFileLanguage(
+						opts!
+							.replaceAll(/-L\d+$/g, "")
+							.replaceAll(/-L\d+$/g, "")
+							.replaceAll("-", "."),
+				  )
+				: resolveFileLanguage(rawData);
+		const path =
+			type === GitHubUrlType.Gist
+				? `${new URL(url).pathname}#file-${opts!.replaceAll(/-L\d+$/g, "").replaceAll(/-L\d+$/g, "")}`
+				: new URL(url).pathname;
+		const parsedLines = fileContents.split("\n");
 
 		const [safeStartLine, safeEndLine] = [
-			Math.min(startLine, parsedLines.length),
-			Math.min(endLine ? endLine : startLine, parsedLines.length),
+			// eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+			Math.min(startLine || 1, parsedLines.length),
+			// eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+			Math.min(endLine ? endLine : startLine || parsedLines.length, parsedLines.length),
 		];
 
 		const linesRequested = parsedLines.slice(safeStartLine - 1, safeEndLine);
